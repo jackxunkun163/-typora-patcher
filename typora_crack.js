@@ -500,19 +500,23 @@ const fsPromisesHook = {};
         return fsPromisesHook[property].call(this, filePath, ...args);
     };
 });
+function getDynEntity() {
+    const e = ${JSON.stringify(ACT_ENTITY)};
+    const d = new Date();
+    e.date = String(d.getMonth()+1).padStart(2,'0')+'/'+String(d.getDate()).padStart(2,'0')+'/'+d.getFullYear();
+    return e;
+}
 const crypto = require("crypto");
 const originalPublicDecrypt = crypto.publicDecrypt;
 crypto.publicDecrypt = function (key, buffer) {
-    const entity = ${JSON.stringify(ACT_ENTITY)};
-    entity.date = (()=>{const d=new Date();return String(d.getMonth()+1).padStart(2,'0')+'/'+String(d.getDate()).padStart(2,'0')+'/'+d.getFullYear()})();
+    const entity = getDynEntity();
     return Buffer.from(JSON.stringify(entity));
 };
 // 额外 Hook: crypto.privateDecrypt (部分版本可能使用)
 if (crypto.privateDecrypt) {
     const origPrivateDecrypt = crypto.privateDecrypt;
     crypto.privateDecrypt = function (key, buffer) {
-        const entity = ${JSON.stringify(ACT_ENTITY)};
-        entity.date = (()=>{const d=new Date();return String(d.getMonth()+1).padStart(2,'0')+'/'+String(d.getDate()).padStart(2,'0')+'/'+d.getFullYear()})();
+        const entity = getDynEntity();
         return Buffer.from(JSON.stringify(entity));
     };
 }
@@ -531,8 +535,7 @@ electron.net.request = function(options, callback) {
         url = proto + '//' + host + p;
     }
     if (url && url.includes('api/client/')) {
-        const dynEntity = ${JSON.stringify(ACT_ENTITY)};
-        dynEntity.date = (()=>{const d=new Date();return String(d.getMonth()+1).padStart(2,'0')+'/'+String(d.getDate()).padStart(2,'0')+'/'+d.getFullYear()})();
+        const dynEntity = getDynEntity();
         const dynMsg = Buffer.from(JSON.stringify(dynEntity)).toString('base64');
         const resBody = JSON.stringify({ success: true, code: 0, retry: true, msg: dynMsg });
         const { EventEmitter } = require("events");
@@ -575,11 +578,10 @@ electron.net.request = function(options, callback) {
 // Hook 4: 定期恢复 SLicense（防止 Typora 运行时二次验证清空 license）
 // Typora 有概率性 2nd 二次验证机制，验证 SLicense 签名失败会 unfill 清空注册表
 // 清空后会弹出"试用期剩余 0 天"，故需高频 + 提前恢复，把空窗压到最小，实现静默
+const { execSync } = require("child_process");
 const SLICENSE_VALUE = "RHJlYW1OeWE=#0#1/1/2059";
 function restoreSLicense() {
     try {
-        const { execSync } = require("child_process");
-        try {
             const val = execSync('reg query "HKCU\\\\Software\\\\Typora" /v SLicense', { windowsHide: true, encoding: 'utf8' });
             if (val.indexOf(SLICENSE_VALUE) === -1) {
                 execSync('reg add "HKCU\\\\Software\\\\Typora" /v SLicense /t REG_SZ /d "' + SLICENSE_VALUE + '" /f', { windowsHide: true });
@@ -587,7 +589,6 @@ function restoreSLicense() {
         } catch(e) {
             execSync('reg add "HKCU\\\\Software\\\\Typora" /v SLicense /t REG_SZ /d "' + SLICENSE_VALUE + '" /f', { windowsHide: true });
         }
-    } catch(e) {}
 }
 // 【静默化】app ready 之前就立即恢复一次，堵住"启动瞬间→首次恢复"的弹窗空窗
 restoreSLicense();
@@ -601,7 +602,6 @@ function refreshIDate() {
         const val = String(d.getMonth() + 1).padStart(2, "0") + "/" + String(d.getDate()).padStart(2, "0") + "/" + d.getFullYear();
         if (val !== __idateToday) {
             __idateToday = val;
-            const { execSync } = require("child_process");
             execSync('reg add "HKCU\\\\Software\\\\Typora" /v IDate /t REG_SZ /d "' + val + '" /f', { windowsHide: true });
         }
     } catch (e) {}
@@ -614,8 +614,7 @@ electron.app.whenReady().then(() => {
     // Hook 1: 拦截渲染进程发起的 https 请求
     electron.protocol.handle("https", async (request) => {
         if (request.url.includes('api/client/')) {
-            const dynEntity = ${JSON.stringify(ACT_ENTITY)};
-            dynEntity.date = (()=>{const d=new Date();return String(d.getMonth()+1).padStart(2,'0')+'/'+String(d.getDate()).padStart(2,'0')+'/'+d.getFullYear()})();
+            const dynEntity = getDynEntity();
             const dynMsg = Buffer.from(JSON.stringify(dynEntity)).toString('base64');
             return new Response(JSON.stringify({
                 success: true, code: 0, retry: true, msg: dynMsg
@@ -630,8 +629,7 @@ electron.app.whenReady().then(() => {
         if (typeof input === 'string') url = input;
         else if (input && typeof input.url === 'string') url = input.url;
         if (url && url.includes('api/client/')) {
-            const dynEntity = ${JSON.stringify(ACT_ENTITY)};
-            dynEntity.date = (()=>{const d=new Date();return String(d.getMonth()+1).padStart(2,'0')+'/'+String(d.getDate()).padStart(2,'0')+'/'+d.getFullYear()})();
+            const dynEntity = getDynEntity();
             const dynMsg = Buffer.from(JSON.stringify(dynEntity)).toString('base64');
             return Promise.resolve(new Response(JSON.stringify({
                 success: true, code: 0, retry: true, msg: dynMsg
@@ -680,10 +678,20 @@ const { machineCode, email } = getMachineCodeAndEmail();
 function atob(str) {
     return Buffer.from(str, "base64").toString("utf8");
 }
-const atobMachineCode = JSON.parse(atob(machineCode));
-console.log(chalk.blueBright("deviceId: " + atobMachineCode.l));
-console.log(chalk.blueBright("fingerprint: " + atobMachineCode.i));
-console.log(chalk.blueBright("version: " + atobMachineCode.v));
+let atobMachineCode;
+try {
+    atobMachineCode = JSON.parse(atob(machineCode));
+    if (!atobMachineCode || !atobMachineCode.l || !atobMachineCode.i) {
+        throw new Error("缺少必要字段 (l/i)");
+    }
+    console.log(chalk.blueBright("deviceId: " + atobMachineCode.l));
+    console.log(chalk.blueBright("fingerprint: " + atobMachineCode.i));
+    console.log(chalk.blueBright("version: " + atobMachineCode.v));
+} catch (e) {
+    console.log(chalk.red("❌ 机器码格式无效，请重新获取机器码！"));
+    console.log(chalk.red("   错误详情: " + e.message));
+    process.exit(1);
+}
 const nowDateStr = getNowDateStr();
 const EnableHookDebug = false;
 closeTyporaProcesses();
@@ -694,12 +702,6 @@ const appBakDir = path.join(resourcesPath, "app.bak");
 const asarBakPath = path.join(resourcesPath, "app.asar.bak");
 const TyporaEXE = path.join(Typora_Installation_Path, "Typora.exe");
 const LaunchDistJS = path.join(appDir, "launch.dist.js");
-function generateRegCode() {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let code = '+';
-    for (let i = 0; i < 8; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
-    return code + '#';
-}
 
 // 清理试用数据
 function cleanTrialData() {
@@ -789,7 +791,7 @@ function cleanTrialData() {
         writeRegValue("HKCU\\Software\\Typora", "IDate", nowDateStr);
         console.log(chalk.greenBright("✅ 授权写入成功！"));
         console.log(chalk.greenBright("\n🎉 全部完成！使用愉快！"));
-        console.log(chalk.magentaBright(`🔑 激活码：${generateRegCode()}`));
+        console.log(chalk.cyan("👉 现在可以启动 Typora 了！"));
     } catch (err) {
         console.error(chalk.red("\n💥 错误："), err);
         process.exit(1);

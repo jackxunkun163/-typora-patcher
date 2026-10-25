@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 > nul
 where node >nul 2>nul || (
     echo.
     echo  Node.js not found, please install: https://nodejs.org/zh-cn
